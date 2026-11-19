@@ -125,7 +125,9 @@ function TopUtils({ compact = false }: { compact?: boolean }) {
       />
       <button
         type="button"
-        onClick={() => setLocale(locale === "en" ? "ar" : "en")}
+        onClick={() => {
+          void setLocale(locale === "en" ? "ar" : "en");
+        }}
         className="tracking-[0.04em]"
       >
         {locale === "en" ? "العربية" : "English"}

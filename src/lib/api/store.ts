@@ -223,6 +223,40 @@ export const storeApi = {
     });
   },
 
+  /**
+   * Authenticated storefront sandbox checkout (MyFatoorah demo).
+   * Available only when settings.features.sandbox_checkout_enabled is true.
+   */
+  sandboxCheckout(payload: {
+    idempotency_key: string;
+    market_id?: number;
+    payment_method: "CARD" | "APPLE_PAY" | "GOOGLE_PAY" | "KNET";
+    items: Array<{ variant_id: number; quantity: number }>;
+    shipping_address: {
+      first_name: string;
+      last_name?: string | null;
+      phone?: string | null;
+      line1: string;
+      line2?: string | null;
+      city: string;
+      state?: string | null;
+      postal_code?: string | null;
+      country_code: string;
+    };
+  }) {
+    return apiRequest<StorefrontCheckoutResult>(
+      "/storefront/checkout/sandbox",
+      {
+        method: "POST",
+        auth: true,
+        body: {
+          ...payload,
+          market_id: marketId(payload.market_id),
+        },
+      },
+    );
+  },
+
   /** Published homepage CMS sections */
   homepage(locale?: StorefrontLocale) {
     return apiRequest<StorefrontHomepageSection[]>("/storefront/homepage", {

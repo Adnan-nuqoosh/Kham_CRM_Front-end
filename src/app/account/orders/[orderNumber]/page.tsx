@@ -10,6 +10,7 @@ import {
 } from "@/lib/api";
 import { formatMoney } from "@/lib/money";
 import { useShop } from "@/lib/store";
+import { rememberPendingPayment } from "@/lib/pending-payment";
 import { Button } from "@/components/ui/button";
 
 export default function AccountOrderDetailPage() {
@@ -80,6 +81,11 @@ export default function AccountOrderDetailPage() {
 
   const currency = order.currency_code || "EGP";
   const items = Array.isArray(order.items) ? order.items : [];
+  const recovery = order.payment_recovery;
+  const paymentUrl =
+    recovery?.can_resume_payment && recovery.payment_url
+      ? recovery.payment_url
+      : null;
 
   return (
     <div className="mx-auto max-w-3xl px-4 py-12 sm:px-6">
@@ -95,6 +101,29 @@ export default function AccountOrderDetailPage() {
           .filter(Boolean)
           .join(" · ")}
       </p>
+
+      {paymentUrl ? (
+        <div className="mt-6 rounded-2xl border border-border bg-sand/40 px-5 py-4">
+          <p className="text-sm text-ink">
+            Payment is still pending. Continue on MyFatoorah to complete this
+            order.
+          </p>
+          <Button
+            className="mt-4"
+            onClick={() => {
+              rememberPendingPayment(order.order_number, paymentUrl);
+              window.location.assign(paymentUrl);
+            }}
+          >
+            Complete payment
+          </Button>
+        </div>
+      ) : recovery?.requires_reconciliation ? (
+        <p className="mt-6 text-sm text-muted">
+          Payment initiation needs reconciliation. Contact support before
+          starting another payment for this order.
+        </p>
+      ) : null}
 
       <div className="mt-10 space-y-3 text-sm">
         <div className="flex justify-between gap-3">

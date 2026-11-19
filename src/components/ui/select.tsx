@@ -57,6 +57,9 @@ export function Select({
 
   const light = tone === "light";
 
+  // Form/default selects keep a stable width across values. Light/header
+  // selects hug the current label so the chevron sits beside the text.
+  const lockWidth = !fullWidth && !light;
   const longestLabel = options.reduce(
     (longest, opt) => (opt.label.length > longest.length ? opt.label : longest),
     selected?.label ?? "",
@@ -66,7 +69,8 @@ export function Select({
     <div
       ref={rootRef}
       className={cn(
-        "relative inline-grid max-w-full text-start",
+        "relative max-w-full text-start",
+        lockWidth ? "inline-grid" : "inline-block",
         fullWidth && "block w-full",
         className,
       )}
@@ -77,22 +81,12 @@ export function Select({
         </span>
       ) : null}
       {/* Invisible widest option keeps trigger/menu width stable across values */}
-      {!fullWidth ? (
+      {lockWidth ? (
         <div
-          className={cn(
-            "invisible col-start-1 row-start-1 whitespace-nowrap",
-            light
-              ? "text-[11px] tracking-[0.06em]"
-              : "px-3 text-xs uppercase tracking-[0.14em]",
-          )}
+          className="invisible col-start-1 row-start-1 whitespace-nowrap px-3 text-xs uppercase tracking-[0.14em]"
           aria-hidden
         >
-          <div
-            className={cn(
-              "inline-flex items-center justify-between gap-1.5",
-              light ? "h-auto" : "h-9",
-            )}
-          >
+          <div className="inline-flex h-9 items-center justify-between gap-1.5">
             <span>{longestLabel}</span>
             <span className="size-3 shrink-0" />
           </div>
@@ -107,9 +101,12 @@ export function Select({
         aria-controls={listId}
         onClick={() => setOpen((v) => !v)}
         className={cn(
-          "col-start-1 row-start-1 inline-flex w-full items-center justify-between gap-1.5 outline-none transition-colors",
+          "inline-flex items-center outline-none transition-colors",
+          lockWidth
+            ? "col-start-1 row-start-1 w-full justify-between gap-1.5"
+            : "w-auto justify-start gap-1.5",
           fullWidth
-            ? "h-11 rounded-full border border-border bg-paper px-4 text-sm text-ink hover:bg-cream"
+            ? "h-11 w-full justify-between rounded-full border border-border bg-paper px-4 text-sm text-ink hover:bg-cream"
             : light
               ? "bg-transparent text-[11px] tracking-[0.06em] text-cream hover:text-cream/90"
               : "h-9 rounded-full border border-border bg-paper px-3 text-xs uppercase tracking-[0.14em] text-ink hover:bg-cream",

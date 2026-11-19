@@ -27,6 +27,7 @@ import {
 import { FieldError } from "@/components/field-error";
 import { Button } from "@/components/ui/button";
 import { Select } from "@/components/ui/select";
+import { rememberPendingPayment } from "@/lib/pending-payment";
 
 const fieldInput =
   "mt-2 h-11 w-full rounded-full border border-border bg-paper px-4 text-sm outline-none";
@@ -39,13 +40,19 @@ export default function CheckoutPage() {
   const user = useShop((s) => s.user);
   const token = useShop((s) => s.token);
   const clearCart = useShop((s) => s.clearCart);
+  const bootstrapMarkets = useShop((s) => s.bootstrapMarkets);
   const marketCode = useShop((s) => s.marketCode);
   const checkoutReady = useShop((s) => s.checkoutReady);
+  const sandboxCheckoutReady = useShop((s) => s.sandboxCheckoutReady);
   const localMockCheckout = useShop((s) => s.localMockCheckout);
   const { currencyCode, marketId } = useCatalog();
 
-  const testCheckoutEnabled = envTestCheckout || localMockCheckout;
+  // Prefer paid sandbox/production over local mock whenever sandbox is ready.
+  const testCheckoutEnabled =
+    (envTestCheckout || localMockCheckout) && !sandboxCheckoutReady;
   const canProductionCheckout = Boolean(token && checkoutReady);
+  const canSandboxCheckout = Boolean(token && sandboxCheckoutReady);
+  const canPaidCheckout = canProductionCheckout || canSandboxCheckout;
 
   const [countryCode, setCountryCode] = useState(marketCode);
   const [cityOptions, setCityOptions] = useState<string[]>(() => [
@@ -68,6 +75,8 @@ export default function CheckoutPage() {
   const [fieldErrors, setFieldErrors] = useState<FieldErrors>({});
   const [placed, setPlaced] = useState<string | null>(null);
   const [paymentUrl, setPaymentUrl] = useState<string | null>(null);
+  /** True while handing off to MyFatoorah — avoid flashing the thank-you page. */
+  const [redirectingPayment, setRedirectingPayment] = useState(false);
   const [quotedSubtotal, setQuotedSubtotal] = useState<number | null>(null);
   const [quotedShipping, setQuotedShipping] = useState<number | null>(null);
   const [quotedTax, setQuotedTax] = useState<number | null>(null);
@@ -119,6 +128,11 @@ export default function CheckoutPage() {
     setEmail(user?.email ?? "");
     setPhone(user?.phone ?? "");
   }, [user]);
+
+  // Refresh checkout gates (sandbox/production/mock) when opening checkout.
+  useEffect(() => {
+    void bootstrapMarkets();
+  }, [bootstrapMarkets]);
 
   // Sync shipping country when the header market changes — do not clear cart here.
   useEffect(() => {
@@ -198,8 +212,14 @@ export default function CheckoutPage() {
       setQuotedTotalBeforeTax(Number.isFinite(beforeTax) ? beforeTax : null);
       setQuotedCurrency(q.currency_code || null);
       setQuoteOk(true);
+      // Quote API uses production readiness. Sandbox-ready markets can still pay
+      // via /storefront/checkout/sandbox, so don't show the live-only warning then.
+      const payableNow =
+        Boolean(q.is_final_payable_total) ||
+        checkoutReady ||
+        sandboxCheckoutReady;
       setQuoteNote(
-        q.is_final_payable_total
+        payableNow
           ? null
           : "This is a provisional quote. Final payable total unlocks when tax/shipping readiness gates pass.",
       );
@@ -236,7 +256,24 @@ export default function CheckoutPage() {
       return;
     }
     setBusy(true);
+    let handingOffToPayment = false;
     try {
+      // Fresh gates — avoid stale mock path after sandbox was enabled.
+      await bootstrapMarkets();
+      const {
+        token: latestToken,
+        checkoutReady: prodReady,
+        sandboxCheckoutReady: sandboxReady,
+        localMockCheckout: mockReady,
+      } = useShop.getState();
+      const useProduction = Boolean(latestToken && prodReady);
+      const useSandbox = Boolean(latestToken && sandboxReady);
+      const useMock =
+        !useProduction &&
+        !useSandbox &&
+        !sandboxReady &&
+        (envTestCheckout || mockReady);
+
       const quote = await refreshQuote();
       if (!quote) return;
 
@@ -251,27 +288,58 @@ export default function CheckoutPage() {
         country_code: countryCode,
       };
 
-      if (canProductionCheckout) {
-        const res = await storeApi.checkout({
-          idempotency_key,
-          market_id: quoteMarketId,
-          payment_method: paymentMethod,
-          items,
-          shipping_address,
-        });
+      if (sandboxReady && !latestToken) {
+        setError("Sign in to pay with MyFatoorah sandbox.");
+        window.dispatchEvent(new Event("kham:open-signin"));
+        return;
+      }
+
+      if (useProduction || useSandbox) {
+        const res = useProduction
+          ? await storeApi.checkout({
+              idempotency_key,
+              market_id: quoteMarketId,
+              payment_method: paymentMethod,
+              items,
+              shipping_address,
+            })
+          : await storeApi.sandboxCheckout({
+              idempotency_key,
+              market_id: quoteMarketId,
+              payment_method: paymentMethod,
+              items,
+              shipping_address,
+            });
         const data = res.data;
-        setPlaced(data.order_number || "OK");
-        if (data.payment_url) setPaymentUrl(data.payment_url);
+        const orderNumber = data.order_number || "OK";
+        if (data.payment_url) {
+          // Do not set `placed` here — that mounts the thank-you UI before
+          // navigation and feels like payment was already completed.
+          handingOffToPayment = true;
+          rememberPendingPayment(orderNumber, data.payment_url);
+          setPaymentUrl(data.payment_url);
+          setRedirectingPayment(true);
+          clearCart();
+          window.location.assign(data.payment_url);
+          return;
+        }
+        setPlaced(orderNumber);
+        setError(
+          "Order was created but no payment URL was returned. Open the order and use Complete payment if available.",
+        );
         clearCart();
         return;
       }
 
-      if (!testCheckoutEnabled) {
+      if (!useMock) {
         setError(
-          token
-            ? "Production checkout isn’t ready for this market yet (tax/shipping gates). You can still get a quote."
-            : "Sign in to use production checkout when ready, or enable local test checkout for QA.",
+          latestToken
+            ? "Paid checkout isn’t ready for this market yet."
+            : "Sign in to pay with sandbox checkout.",
         );
+        if (!latestToken) {
+          window.dispatchEvent(new Event("kham:open-signin"));
+        }
         return;
       }
 
@@ -291,6 +359,7 @@ export default function CheckoutPage() {
       setPlaced(order.order_number || String(order.id || "OK"));
       clearCart();
     } catch (err) {
+      setRedirectingPayment(false);
       setError(
         friendlyApiError(
           err,
@@ -298,8 +367,28 @@ export default function CheckoutPage() {
         ),
       );
     } finally {
-      setBusy(false);
+      // Keep busy while the browser navigates to MyFatoorah.
+      if (!handingOffToPayment) setBusy(false);
     }
+  }
+
+  if (redirectingPayment) {
+    return (
+      <div className="mx-auto max-w-lg px-6 py-20 text-center">
+        <p className="text-[11px] uppercase tracking-[0.2em] text-muted">
+          Checkout
+        </p>
+        <h1 className="mt-3 font-display text-4xl">Redirecting to payment…</h1>
+        <p className="mt-4 text-sm text-muted">
+          Opening MyFatoorah securely. If nothing happens, use the button below.
+        </p>
+        {paymentUrl ? (
+          <a href={paymentUrl} className="mt-6 inline-block">
+            <Button>Continue to payment</Button>
+          </a>
+        ) : null}
+      </div>
+    );
   }
 
   if (cart.length === 0 && !placed) {
@@ -329,6 +418,11 @@ export default function CheckoutPage() {
             <Button>Complete payment</Button>
           </a>
         ) : null}
+        <p className="mt-4 text-xs text-muted">
+          {paymentUrl
+            ? "You’ll return here after MyFatoorah redirects to /payment-result."
+            : null}
+        </p>
         <div className="mt-8 flex justify-center gap-4">
           <Link href="/account/orders">
             <Button variant="outline">View orders</Button>
@@ -512,7 +606,7 @@ export default function CheckoutPage() {
             />
           </label>
         ) : null}
-        {canProductionCheckout ? (
+        {canPaidCheckout || sandboxCheckoutReady ? (
           <label className="block text-xs uppercase tracking-[0.16em] text-muted">
             Payment method
             <Select
@@ -544,10 +638,21 @@ export default function CheckoutPage() {
         {quoteNote ? (
           <p className="text-xs text-muted">{quoteNote}</p>
         ) : null}
-        {!canProductionCheckout && !testCheckoutEnabled ? (
+        {sandboxCheckoutReady && !token ? (
           <p className="text-xs text-muted">
-            Final payable checkout unlocks when the selected market is ready
-            (approved tax + shipping) and you are signed in.
+            Sandbox payment is available — sign in, then place the order to pay
+            on MyFatoorah.
+          </p>
+        ) : !canPaidCheckout && !testCheckoutEnabled ? (
+          <p className="text-xs text-muted">
+            Paid checkout unlocks when you are signed in and the market is ready
+            for sandbox or production payment (approved tax + shipping + payment
+            flags).
+          </p>
+        ) : canSandboxCheckout && !canProductionCheckout ? (
+          <p className="text-xs text-muted">
+            Sandbox checkout is enabled for this market. You’ll be sent to
+            MyFatoorah’s demo payment page (test cards only).
           </p>
         ) : null}
         {error ? (
@@ -559,7 +664,9 @@ export default function CheckoutPage() {
           type="submit"
           disabled={
             busy ||
-            ((canProductionCheckout || testCheckoutEnabled) &&
+            ((canPaidCheckout ||
+              testCheckoutEnabled ||
+              sandboxCheckoutReady) &&
               !quoteOk &&
               items.length > 0)
           }
@@ -568,9 +675,13 @@ export default function CheckoutPage() {
             ? "Placing…"
             : canProductionCheckout
               ? "Pay & place order"
-              : testCheckoutEnabled
-                ? "Place test order"
-                : "Get quote / continue"}
+              : canSandboxCheckout
+                ? "Pay with sandbox"
+                : sandboxCheckoutReady
+                  ? "Sign in to pay"
+                  : testCheckoutEnabled
+                    ? "Place test order"
+                    : "Get quote / continue"}
         </Button>
       </div>
       <aside className="h-fit rounded-2xl border border-border bg-paper p-6">
