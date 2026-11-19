@@ -71,11 +71,20 @@ export function resolveMarketId(code: string): number {
   return fallbacks[upper] ?? getStoreMarketId();
 }
 
+const SHORT_MARKET_NAMES: Record<string, string> = {
+  EG: "Egypt",
+  AE: "UAE",
+  SA: "Saudi",
+};
+
 export function marketSelectOptions() {
-  return getStoreMarkets().map((m) => ({
-    value: m.code,
-    label: `${m.name} (${m.currencyCode})`,
-  }));
+  return getStoreMarkets().map((m) => {
+    const short = SHORT_MARKET_NAMES[m.code] ?? m.name;
+    return {
+      value: m.code,
+      label: `${short} (${m.currencyCode})`,
+    };
+  });
 }
 
 export function defaultCityForMarket(code: string): string {

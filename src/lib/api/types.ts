@@ -79,6 +79,14 @@ export type StorefrontMarket = {
   is_default?: boolean;
 };
 
+export type StorefrontCheckoutReadiness = {
+  ready?: boolean;
+  reason_code?: string | null;
+  blockers?: string[];
+  tax_status?: string;
+  is_final_payable_total?: boolean;
+};
+
 export type StorefrontSettings = {
   default_market_id?: number | null;
   default_market_code?: string | null;
@@ -87,18 +95,14 @@ export type StorefrontSettings = {
   currency_code?: string | null;
   features?: {
     production_checkout_enabled?: boolean;
+    sandbox_checkout_enabled?: boolean;
     customer_accounts_enabled?: boolean;
     wishlist_enabled?: boolean;
     coupons_enabled?: boolean;
     local_mock_checkout?: boolean;
   };
-  checkout?: {
-    ready?: boolean;
-    reason_code?: string | null;
-    blockers?: string[];
-    tax_status?: string;
-    is_final_payable_total?: boolean;
-  };
+  sandbox_checkout?: StorefrontCheckoutReadiness;
+  checkout?: StorefrontCheckoutReadiness;
 };
 
 export type StorefrontDestinations = {
@@ -160,6 +164,14 @@ export type StorefrontOrderSummary = {
   created_at?: string;
 };
 
+export type StorefrontOrderPaymentRecovery = {
+  payment_status?: string;
+  initiation_status?: string | null;
+  can_resume_payment?: boolean;
+  payment_url?: string | null;
+  requires_reconciliation?: boolean;
+};
+
 export type StorefrontOrderDetail = {
   order_number: string;
   status?: string;
@@ -175,6 +187,7 @@ export type StorefrontOrderDetail = {
   placed_at?: string | null;
   items?: unknown[];
   shipping_address?: StorefrontAddress | Record<string, unknown> | null;
+  payment_recovery?: StorefrontOrderPaymentRecovery;
   shipments?: Array<{
     carrier?: string | null;
     tracking_number?: string | null;
@@ -189,6 +202,9 @@ export type StorefrontCheckoutResult = {
   payment_url?: string | null;
   payment_status?: string;
   initiation_status?: string;
+  currency_code?: string;
+  amount?: string | number;
+  sandbox?: boolean;
 };
 
 export type StorefrontBrand = {

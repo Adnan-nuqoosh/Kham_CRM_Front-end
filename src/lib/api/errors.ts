@@ -25,6 +25,13 @@ export function friendlyApiError(
       return "Too many attempts. Please wait a moment and try again.";
     case "NOT_FOUND":
       return "We couldn’t find what you’re looking for.";
+    case "PAYMENT_INITIATION_UNCERTAIN":
+      return "Payment couldn’t be started with MyFatoorah. The order may already exist as pending — open it to resume payment if a link is available, or check the sandbox token/merchant setup and try again.";
+    case "SANDBOX_CHECKOUT_NOT_CONFIGURED":
+    case "SANDBOX_CHECKOUT_NOT_READY":
+      return "Sandbox checkout isn’t fully configured yet. Please try again after payment settings are ready.";
+    case "PAYMENT_RECONCILIATION_REQUIRED":
+      return "Payment may have started but needs reconciliation. Don’t retry with a new key — check your orders or contact support.";
     default:
       break;
   }

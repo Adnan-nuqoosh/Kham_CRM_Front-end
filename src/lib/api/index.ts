@@ -4,6 +4,7 @@ export {
   getStoreMarket,
   getStoreMarketId,
   getStoreLocale,
+  setStoreLocale,
   getStoreToken,
   setStoreToken,
   mediaUrl,

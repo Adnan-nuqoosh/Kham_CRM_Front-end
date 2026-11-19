@@ -41,7 +41,15 @@ export function getStoreMarketId(): number {
   return Number.isFinite(n) && n > 0 ? n : 1;
 }
 
+/** Runtime locale for API queries — kept in sync with the shop `locale` state. */
+let runtimeLocale: StorefrontLocale | null = null;
+
+export function setStoreLocale(locale: StorefrontLocale | null) {
+  runtimeLocale = locale === "ar" ? "ar" : locale === "en" ? "en" : null;
+}
+
 export function getStoreLocale(): StorefrontLocale {
+  if (runtimeLocale) return runtimeLocale;
   const loc = (process.env.NEXT_PUBLIC_STORE_LOCALE || "en").toLowerCase();
   return loc === "ar" ? "ar" : "en";
 }

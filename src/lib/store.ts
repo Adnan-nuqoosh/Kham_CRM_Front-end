@@ -5,8 +5,8 @@ import { persist } from "zustand/middleware";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import type { Currency, Locale } from "./money";
-import { getStoreMarket, setStoreToken, storeApi } from "./api";
-import { syncCartForMarket } from "./cart-market";
+import { getStoreMarket, setStoreLocale, setStoreToken, storeApi } from "./api";
+import { refreshCartForLocale, syncCartForMarket } from "./cart-market";
 import {
   getStoreMarketByCode,
   resolveMarketId,
@@ -43,7 +43,7 @@ export interface Order {
 
 interface ShopState {
   cart: CartLine[];
-  /** Per-market bag snapshots so switching back can restore. */
+  /** Last known bag per market (snapshot on leave / after sync). Active cart always migrates. */
   cartsByMarket: Record<string, CartLine[]>;
   wishlist: string[];
   wishlistIds: number[];
@@ -57,6 +57,7 @@ interface ShopState {
   orders: Order[];
   recent: string[];
   checkoutReady: boolean;
+  sandboxCheckoutReady: boolean;
   localMockCheckout: boolean;
   marketSwitching: boolean;
   addToCart: (line: Omit<CartLine, "qty"> & { qty?: number }) => void;
@@ -67,7 +68,7 @@ interface ShopState {
   setMarketCode: (code: string) => Promise<void>;
   /** @deprecated Prefer setMarketCode — kept for older callers. */
   setCurrency: (c: Currency) => void;
-  setLocale: (l: Locale) => void;
+  setLocale: (l: Locale) => Promise<void>;
   setSession: (user: GuestUser, token: string) => void;
   signInLocal: (user: GuestUser) => void;
   signOut: () => Promise<void>;
@@ -115,6 +116,7 @@ export const useShop = create<ShopState>()(
       orders: [],
       recent: [],
       checkoutReady: false,
+      sandboxCheckoutReady: false,
       localMockCheckout: false,
       marketSwitching: false,
       addToCart: (line) => {
@@ -187,17 +189,14 @@ export const useShop = create<ShopState>()(
         if (prev === market.code) return;
         if (get().marketSwitching) return;
 
-        // Snapshot the bag for the market we are leaving.
+        // Always migrate the *active* bag into the destination market.
+        // Restoring a stale destination snapshot made it look like products
+        // were deleted when the catalogs are shared across markets.
+        const seed = [...get().cart];
         const cartsByMarket = {
           ...get().cartsByMarket,
-          [prev]: get().cart,
+          [prev]: seed,
         };
-
-        // Prefer the destination market's previous bag; otherwise migrate current lines.
-        const seed =
-          (cartsByMarket[market.code]?.length
-            ? cartsByMarket[market.code]
-            : get().cart) ?? [];
 
         set({
           marketCode: market.code,
@@ -206,9 +205,9 @@ export const useShop = create<ShopState>()(
           marketSwitching: true,
         });
 
-        void get().bootstrapMarkets();
-
         try {
+          // Resolve live market ids before repricing so market_id is correct.
+          await get().bootstrapMarkets();
           const marketId = resolveMarketId(market.code);
           const result = await syncCartForMarket(seed, marketId);
           set({
@@ -233,7 +232,9 @@ export const useShop = create<ShopState>()(
               `Switched to ${market.code}. Bag prices updated for this market.`,
             );
           } else if (seed.length > 0) {
-            toast.success(`Switched to ${market.code}. Your bag was restored.`);
+            toast.success(
+              `Switched to ${market.code}. Your bag was kept for this market.`,
+            );
           }
         } catch {
           set({ marketSwitching: false });
@@ -243,7 +244,35 @@ export const useShop = create<ShopState>()(
         }
       },
       setCurrency: (currency) => set({ currency }),
-      setLocale: (locale) => set({ locale }),
+      setLocale: async (locale) => {
+        const prev = get().locale;
+        if (prev === locale) return;
+
+        setStoreLocale(locale);
+        set({ locale });
+
+        if (typeof document !== "undefined") {
+          document.documentElement.lang = locale;
+          document.documentElement.dir = locale === "ar" ? "rtl" : "ltr";
+        }
+
+        const cart = get().cart;
+        if (!cart.length) return;
+
+        try {
+          const marketId = resolveMarketId(get().marketCode);
+          const updated = await refreshCartForLocale(cart, marketId, locale);
+          set({
+            cart: updated,
+            cartsByMarket: {
+              ...get().cartsByMarket,
+              [get().marketCode]: updated,
+            },
+          });
+        } catch {
+          /* keep existing cart names if refresh fails */
+        }
+      },
       setSession: (user, token) => {
         setStoreToken(token);
         set({ user, token });
@@ -309,6 +338,10 @@ export const useShop = create<ShopState>()(
           const settings = settingsRes.data;
           set({
             checkoutReady: Boolean(settings.checkout?.ready),
+            sandboxCheckoutReady: Boolean(
+              settings.features?.sandbox_checkout_enabled ??
+                settings.sandbox_checkout?.ready,
+            ),
             localMockCheckout: Boolean(settings.features?.local_mock_checkout),
           });
         } catch {
@@ -316,7 +349,12 @@ export const useShop = create<ShopState>()(
         }
       },
       hydrateAuth: async () => {
-        const { token } = get();
+        const { token, locale } = get();
+        setStoreLocale(locale);
+        if (typeof document !== "undefined") {
+          document.documentElement.lang = locale;
+          document.documentElement.dir = locale === "ar" ? "rtl" : "ltr";
+        }
         await get().bootstrapMarkets();
         // Keep cartsByMarket in sync with active cart after rehydrate.
         const marketCode = get().marketCode;
@@ -325,6 +363,25 @@ export const useShop = create<ShopState>()(
           set({
             cartsByMarket: { ...get().cartsByMarket, [marketCode]: cart },
           });
+        }
+        // Ensure persisted bag names match the restored locale.
+        if (cart.length) {
+          try {
+            const updated = await refreshCartForLocale(
+              cart,
+              resolveMarketId(marketCode),
+              locale,
+            );
+            set({
+              cart: updated,
+              cartsByMarket: {
+                ...get().cartsByMarket,
+                [marketCode]: updated,
+              },
+            });
+          } catch {
+            /* keep persisted names */
+          }
         }
         if (!token) return;
         setStoreToken(token);
